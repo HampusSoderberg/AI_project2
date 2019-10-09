@@ -3,31 +3,72 @@ myFunction <- function (moveInfo, readings, positions, edges, probs)
   "
   Main function for the algorithm so solve WheresCroc
   "
-  paths = best_first(edges)
-  options = getOptions(positions[3], edges)
-  print("Move 1 options (plus 0 for search):")
-  print(options)
-  mv1 = readline("Move 1: ")
-  if (mv1 == "q") {
-    stop()
+  
+  if (moveInfo$mem$status == 0) {
+    paths = best_first(edges)  # Find best first path
+    transitions = compute_t(edges)  # Compute transition matrix
+    moveInfo$mem$paths = paths
+    moveInfo$mem$transitions = transitions
   }
-  if (!mv1 %in% options && mv1 != 0) {
-    warning("Invalid move. Search ('0') specified.")
-    mv1 = 0
+  else {
+    paths = moveInfo$mem$paths
+    transitions = moveInfo$mem$transitions
   }
-  if (mv1 != 0) {
-    options = getOptions(mv1, edges)
+  
+  # Set up f(t-1)
+  if ((moveInfo$mem$status == 0) || (moveInfo$mem$status == 1)) {
+    # Set up initial state matrix
+    prob = 1/(length(paths) - length(positions))
+    f = matrix(data = prob, nrow = 1, ncol = 40)
+    for (i in 1:2) {
+      if (!is.na(positions[i])) {
+        f[1,i] = 0
+      }
+    }
+    moveInfo$mem$status = 2
   }
-  print("Move 2 options (plus 0 for search):")
-  print(options)
-  mv2 = readline("Move 2: ")
-  if (mv2 == "q") {
-    stop()
+  else {
+    f = moveInfo$mem$f
+    for (i in 1:2) {
+      if (!is.na(positions[i])) {
+        f[1,i] = 0
+      }
+    }
   }
-  if (!mv1 %in% options && mv1 != 0) {
-    warning("Invalid move. Search ('0') specified.")
-    mv2 = 0
+  
+  # Calculate O(t)
+  Ot = prob_function(readings, probs)
+  
+  # Calculate F(t)
+  Ft = f %*% transitions %*% Ot
+  for (i in 1:2) {
+    if (((positions[i] < 0)) && (!is.na(positions[i]))) {
+      Ft = matrix(data = 0, nrow = 1, ncol = 40)
+      Ft[1,-positions[i]] = 1
+    }
+    if (((positions[i] > 0)) && (!is.na(positions[i]))) {
+      Ft[1, positions[i]] = 0
+    }
   }
+  moveInfo$mem$f = Ft
+  
+  # Move towards the most likely pool, if most likely pool is reached search
+  best_pool = which.max(Ft[1,])
+  best_pool = best_pool[1]  # In case of tie
+  moves = c(0,0)
+  pos = positions[length(positions)]
+  for (i in 1:2) {
+    if (pos == best_pool) {
+      moves[i] = 0
+      Ft[1, positions[i]] = 0  # Zero out if searched
+    }
+    else {
+      moves[i] = paths[pos,best_pool]
+      pos = paths[pos,best_pool]
+    }
+  }
+  mv1 = moves[1]
+  mv2 = moves[2]
   moveInfo$moves = c(mv1, mv2)
   return(moveInfo)
 }
@@ -39,40 +80,55 @@ Helper functions
 best_first <- function (edges) 
 {
   "
-  Function to perform a best first search at the beginning of each game to calculate the best path between all
-  of the different pools
-  input: matrix 'edges' of possible moves to make
-  output: Matrix with best path between all pools
+  Function to perform a best first search at the beginning of each game to calculate the best 
+  path between all of the different positions (pools). This function is to be used once every
+  game.
+  
+  Input: 
+    Matrix 'edges' of possible moves to make
+  
+  Output: 
+    Matrix with the best first move to take from one position to another for all 
+    combinations of positions. I.e if you check the output matrix's row[i] and column[j]
+    you will see the optimal first step to take when you're on position i and want to 
+    get to position j.
   " 
-  # Initialize the needed variables
   
+  # Initialize needed variables
   results = matrix(data = 0, nrow = 40, ncol = 40)  # Result matrix
-  
-  # Search for best path beginning with 1-40
-  #final_goal = edges[length(edges[,1]),1]
   final_goal = 0
+  
+  # Loop through rows
   for (k in 1:length(results[,1])) {
-    final_goal = 40
-    for (l in 1:length(results[1,])) {
+    final_goal = 40  # Reset goal variable
+    
+    # Loop through columns
+    for (l in 1:length(results[1,])/2) {
+      # Initialize and reset all the needed variables
       expanded = list(pos = k, cost = 0, path = list())  # Expanded node
-      frontier = list(list(pos = 1, cost = 1000, path = list(1)))  # Initialize frontier with step to pool 2
-      neighboors = list()  # To keep track of neighboors to a pool
+      frontier = list(list(pos = 1, cost = 1000, path = list(1)))  # Frontier
+      neighbors = list()  # Keep track of neighbors to a position
+      
+      # Avoid unnecessary best-first runs
       if ((results[k, final_goal] == 0) && (k != final_goal)) {
+        
+        # Run the actual best first algorithm
         while (expanded$pos != final_goal) {
-          # Find the neighbooring pools
+          
+          # Find the neighbooring positions
           for (i in 1:length(edges[,1])) {
             if (edges[i,1] == expanded$pos) {
-              neighboors <- append(neighboors, edges[i,2])
+              neighbors <- append(neighbors, edges[i,2])
             } 
             else if (edges[i,2] == expanded$pos) {
-              neighboors <- append(neighboors, edges[i,1])
+              neighbors <- append(neighbors, edges[i,1])
             }
           }
           
-          # Time to add the neighboors to the frontier
-          for (i in 1:length(neighboors)) {
+          # Add the neighbors to the frontier
+          for (i in 1:length(neighbors)) {
             pos = expanded$pos
-            pos_check = neighboors[[i]]
+            pos_check = neighbors[[i]]
             if (length(expanded$path) == 0) {
               expanded$path <- append(expanded$path, pos)
             }
@@ -99,13 +155,9 @@ best_first <- function (edges)
             }
           }
           
-          "
-      Find and expand the best node in the frontier
-      "
+          # Find the index/es with the best cost
           best_index = list()  # To keep track of the index of the best node/s
           best_cost = 1005  # To keep track of the best score found so far
-          
-          # Find the index/es with the best cost
           counter = 0
           for (i in 1:length(frontier)) {
             if (best_cost > frontier[[i]]$cost) {
@@ -123,15 +175,12 @@ best_first <- function (edges)
               counter = counter + 1
             }
           }
-          
-          # Break potential ties and determine the final best index of frontier
-          best_index = best_index[[1]]  # No tie for best score so just grab the best one
+          best_index = best_index[[1]]  # No extra attribute to break ties, grab first one
           expanded = frontier[[best_index]]  # Reassign expanded to the new best node in frontier
           frontier = frontier[-best_index]  # Remove the new expanded node from the frontier
           
-          "
-          Add the currently expanded path to the matrix, if not already done
-          "
+          
+          # Add the currently expanded path to the matrix, if not already done
           path = expanded$path
           for (i in 1:floor(length(path)/2)) {
             for (j in 1:length(path)) {
@@ -147,12 +196,75 @@ best_first <- function (edges)
     }
   }
   return(results)
-  
-  # Goal is found. Handle matrix
-  
 }
 
+compute_t <- function(edges) {
+  "
+  Calculate the transition matrix t. Filled with 1/(number of neighbors + 1) for every
+  position.
+  Input:
+    edges: The edges matrix
+  Output: 
+    40x40 matrix with probability of jumping from row[i] to column[j]
+  "
+  # Initialize variables
+  results = matrix(data = 0, nrow = 40, ncol = 40)  # Result matrix
+  
+  # Loop through rows of result
+  for (k in 1:length(results[,1])) {
+    # Find neighbors
+    neighbors = list()
+    for (i in 1:length(edges[,1])) {
+      if (edges[i,1] == k) {
+        neighbors <- append(neighbors, edges[i,2])
+      } 
+      else if (edges[i,2] == k) {
+        neighbors <- append(neighbors, edges[i,1])
+      }
+    }
+    # Loop through columns
+    for (l in 1:length(results[1,])) {
+      is_in = which(neighbors == l)
+      if ((length(is_in) > 0) || (k == l)) {
+        results[k, l] = 1/(length(neighbors) + 1)
+      }
+    }
+  }
+  return(results)
+}
+
+prob_function <- function(readings, probs) {
+  "
+  Function to calculate the probabilities of the croc being in each position based on the 
+  readings it gives.
+  Input:
+    readings: vector of length 3 contating the readings from croc (sal, pho, nit)
+    probs: List of matrices of values and deviation for sal, pho, nit for each position
+  Output: 
+    The observed matrix, 40x40 with 0 in all but diagonal
+  "
+  # Perform all the dnorms
+  sal_dnorm = dnorm(readings[1], probs$salinity[,1], probs$salinity[,2])
+  pho_dnorm = dnorm(readings[2], probs$phosphate[,1], probs$phosphate[,2])
+  nit_dnorm = dnorm(readings[3], probs$nitrogen[,1], probs$nitrogen[,2])
+  
+  # Combine them into final probability
+  tot_dnorm = sal_dnorm * pho_dnorm * nit_dnorm
+  
+  # Create diagonal matrix
+  results = diag(x = tot_dnorm, length(tot_dnorm), length(tot_dnorm))
+  return(results)
+}
 "
-Testing of helper functions
+NOTES:
+  i. Could make it more effective with finding all positions neighbors in one go and 
+  not having to search through edges so many times
+  
+  ii. Add people being eaten
+  
+  iii. Make sure mem works as it should
+  
+  iv. 0 prob if we searched
+  
+  v. if move 1 is 0, move 2 should be second most likely
 "
-# Test the best_first function
